@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ISTS Campus Navigation - Step 5</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+html,body{height:100%;margin:0;font:14px/1.4 Arial,sans-serif;color:#202124}
+#map{height:100%}
+#panel{position:absolute;z-index:1000;top:10px;left:10px;width:340px;max-height:calc(100% - 20px);overflow:auto;background:#fff;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,.4);padding:12px}
+@media(max-width:700px){#panel{right:10px;width:auto;max-height:50%}}
+h1{font-size:17px;margin:0 0 8px}
+input[type=search],select{width:100%;box-sizing:border-box;padding:9px;border:1px solid #bbb;border-radius:6px;font:inherit;margin-bottom:6px}
+button{font:inherit;cursor:pointer}
+.btn{background:#1a73e8;color:#fff;border:0;border-radius:16px;padding:7px 14px}
+.row{display:block;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid #eee;padding:8px 4px}
+.row:hover,.row.sel{background:#f1f3f4}
+.row.sel{box-shadow:inset 3px 0 #1a73e8}
+small{color:#5f6368}
+ol{padding-left:0;list-style:none;margin:8px 0}
+ol li{padding:6px 0;border-bottom:1px solid #eee}
+.lab{background:#fff;border:1px solid #888;font-size:11px;padding:1px 4px}
+.jn{background:#ea4335;color:#fff;border:2px solid #fff;text-align:center;line-height:22px;font:700 11px Arial;cursor:grab}
+.ab{border-radius:50%;color:#fff;border:3px solid #fff;text-align:center;line-height:22px;font:700 12px Arial}
+#out{width:100%;height:110px;font:12px monospace;box-sizing:border-box}
+.swap{float:right;margin-top:-4px;background:none;border:1px solid #bbb;border-radius:6px;padding:3px 8px}
+#navbar{position:absolute;z-index:1000;left:50%;transform:translateX(-50%);bottom:24px;background:#188038;color:#fff;border-radius:12px;padding:10px 14px;display:flex;gap:12px;align-items:center;box-shadow:0 2px 8px rgba(0,0,0,.45);max-width:calc(100% - 40px);font-size:16px;font-weight:700}
+#navbar[hidden]{display:none}
+#navbar button{background:none;border:0;color:#fff;font-size:18px;cursor:pointer}
+#navctl{margin:6px 0}
+#navctl select{width:auto;margin:0 6px 0 0}
+li.cur{background:#e8f0fe;font-weight:700}
+.btn2{background:#fff;color:#1a73e8;border:1px solid #1a73e8;border-radius:16px;padding:6px 12px}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="panel">
+  <h1>ISTS Campus Navigation</h1>
+  <input id="search" type="search" placeholder="Search a place (e.g. library)" autocomplete="off" aria-label="Search a place">
+  <div id="sug"></div>
+  <button class="btn" id="dirbtn">Directions</button>
+  <div style="margin:8px 0">
+    <button class="btn2" id="gpsbtn">📍 Use my location</button>
+    <label style="margin-left:6px"><input type="checkbox" id="test"> Test mode (click the map)</label>
+    <div id="gps"><small>Location is off.</small></div>
+  </div>
+  <div id="dir" hidden>
+    <button class="swap" id="swap" aria-label="Swap start and destination">⇅ Swap</button>
+    <label for="from"><small>From</small></label>
+    <select id="from"></select>
+    <label for="to"><small>To</small></label>
+    <select id="to"></select>
+    <div id="navctl" hidden>
+      <button class="btn" id="startnav">▶ Start navigation</button>
+      <div style="margin-top:6px">
+        <select id="speed" aria-label="Simulation speed">
+          <option value="1.3">Real walking speed</option>
+          <option value="8" selected>Fast demo</option>
+          <option value="20">Very fast demo</option>
+          <option value="gps">📍 My real location (GPS)</option>
+        </select>
+        <label><input type="checkbox" id="voice"> 🔊 Voice</label>
+      </div>
+    </div>
+    <div id="result"></div>
+  </div>
+  <hr>
+  <label><input type="checkbox" id="edit"> Edit junctions (drag the red squares)</label>
+  <div id="editbox" hidden>
+    <textarea id="out" readonly aria-label="Junction coordinates"></textarea>
+    <button id="copy">Copy list</button> <span id="msg"></span>
+    <p><small>Paste a corrected junction list here (lines like J1: 17.097701, 81.916600):</small></p>
+    <textarea id="paste" aria-label="Paste junction list" style="width:100%;height:80px;font:12px monospace;box-sizing:border-box"></textarea>
+    <button id="apply">Apply list</button> <span id="msg2"></span>
+  </div>
+</div>
+<div id="navbar" hidden><span id="navtext"></span><button id="navstop" aria-label="Stop navigation">✕</button></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+/* ===== Campus data (places, junctions, connections) ===== */
+const CAMPUS = {
+ "nodes": [
+  {
+   "id": "gate",
+   "name": "Main Gate",
+   "type": "gate",
+   "lat": 17.097701,
+   "lng": 81.916971
+  },
+  {
+   "id": "park",
+   "name": "Parking",
+   "type": "parking",
+   "lat": 17.098802,
+   "lng": 81.915545
+  },
+  {
+   "id": "bus",
+   "name": "College Bus Bay",
+   "type": "bus",
+   "lat": 17.098692,
+   "lng": 81.91566
+  },
+  {
+   "id": "admin",
+   "name": "Admin Block",
+   "type": "building",
+   "lat": 17.098067,
+   "lng": 81.915169
+  },
+  {
+   "id": "cse",
+   "name": "CSE Block",
+   "type": "dept",
+   "lat": 17.097454,
+   "lng": 81.916315
+  },
+  {
+   "id": "ece",
+   "name": "ECE & EEE Block",
+   "type": "dept",
+   "lat": 17.098773,
+   "lng": 81.915209
+  },
+  {
+   "id": "lib",
+   "name": "Library",
+   "type": "library",
+   "lat": 17.098888,
+   "lng": 81.9153
+  },
+  {
+   "id": "can",
+   "name": "Canteen",
+   "type": "canteen",
+   "lat": 17.099410104902528,
+   "lng": 81.9151920792112
+  },
+  {
+   "id": "mess",
+   "name": "Old Mess",
+   "type": "canteen",
+   "lat": 17.0972784866251,
+   "lng": 81.91598940657589
+  },
+  {
+   "id": "host1",
+   "name": "Girls Hostel",
+   "type": "hostel",
+   "lat": 17.097645848248188,
+   "lng": 81.91571478673872
+  },
+  {
+   "id": "host2",
+   "name": "Girls Hostel 2",
+   "type": "hostel",
+   "lat": 17.097873028992424,
+   "lng": 81.9154872797826
+  },
+  {
+   "id": "host3",
+   "name": "Girls Hostel 3",
+   "type": "hostel",
+   "lat": 17.0972671620722,
+   "lng": 81.91534787856418
+  },
+  {
+   "id": "sport",
+   "name": "Sports Ground",
+   "type": "sport",
+   "lat": 17.098269017025856,
+   "lng": 81.91635626851777
+  },
+  {
+   "id": "temple",
+   "name": "Temple",
+   "type": "temple",
+   "lat": 17.098721728019438,
+   "lng": 81.91694746494863
+  },
+  {
+   "id": "dip",
+   "name": "Diploma Block",
+   "type": "dept",
+   "lat": 17.09758887846564,
+   "lng": 81.91599011801027
+  },
+  {
+   "id": "diphost",
+   "name": "Diploma Hostel",
+   "type": "hostel",
+   "lat": 17.097092327590357,
+   "lng": 81.91672235867203
+  },
+  {
+   "id": "J1",
+   "name": "J1",
+   "type": "junction",
+   "lat": 17.097701,
+   "lng": 81.9166,
+   "estimated": true,
+   "note": "Inside the gate, start of the main internal road"
+  },
+  {
+   "id": "J2",
+   "name": "J2",
+   "type": "junction",
+   "lat": 17.098,
+   "lng": 81.9166,
+   "estimated": true,
+   "note": "North of J1, road toward Sports Ground and Temple"
+  },
+  {
+   "id": "J3",
+   "name": "J3",
+   "type": "junction",
+   "lat": 17.098722,
+   "lng": 81.9166,
+   "estimated": true,
+   "note": "East end of the northern road, turn to Temple"
+  },
+  {
+   "id": "J4",
+   "name": "J4",
+   "type": "junction",
+   "lat": 17.09875,
+   "lng": 81.9158,
+   "estimated": true,
+   "note": "Near College Bus Bay"
+  },
+  {
+   "id": "J5",
+   "name": "J5",
+   "type": "junction",
+   "lat": 17.09883,
+   "lng": 81.91542,
+   "estimated": true,
+   "note": "Between Parking, Library and ECE & EEE Block"
+  },
+  {
+   "id": "J6",
+   "name": "J6",
+   "type": "junction",
+   "lat": 17.0992,
+   "lng": 81.91525,
+   "estimated": true,
+   "note": "North road toward Canteen"
+  },
+  {
+   "id": "J7",
+   "name": "J7",
+   "type": "junction",
+   "lat": 17.098,
+   "lng": 81.9156,
+   "estimated": true,
+   "note": "Central hub near Admin Block and Girls Hostel 2"
+  },
+  {
+   "id": "J8",
+   "name": "J8",
+   "type": "junction",
+   "lat": 17.09765,
+   "lng": 81.91585,
+   "estimated": true,
+   "note": "Near Girls Hostel and Diploma Block"
+  },
+  {
+   "id": "J9",
+   "name": "J9",
+   "type": "junction",
+   "lat": 17.0973,
+   "lng": 81.9157,
+   "estimated": true,
+   "note": "South-west, near Old Mess and Girls Hostel 3"
+  }
+ ],
+ "edges": [
+  {
+   "from": "gate",
+   "to": "J1"
+  },
+  {
+   "from": "J1",
+   "to": "cse"
+  },
+  {
+   "from": "J1",
+   "to": "diphost"
+  },
+  {
+   "from": "J1",
+   "to": "J2"
+  },
+  {
+   "from": "J2",
+   "to": "sport"
+  },
+  {
+   "from": "J2",
+   "to": "J3"
+  },
+  {
+   "from": "J3",
+   "to": "temple"
+  },
+  {
+   "from": "J3",
+   "to": "J4"
+  },
+  {
+   "from": "J4",
+   "to": "bus"
+  },
+  {
+   "from": "J4",
+   "to": "J5"
+  },
+  {
+   "from": "J5",
+   "to": "park"
+  },
+  {
+   "from": "J5",
+   "to": "lib"
+  },
+  {
+   "from": "J5",
+   "to": "ece"
+  },
+  {
+   "from": "J5",
+   "to": "J6"
+  },
+  {
+   "from": "J6",
+   "to": "can"
+  },
+  {
+   "from": "J4",
+   "to": "J7"
+  },
+  {
+   "from": "J7",
+   "to": "admin"
+  },
+  {
+   "from": "J7",
+   "to": "host2"
+  },
+  {
+   "from": "J7",
+   "to": "J8"
+  },
+  {
+   "from": "J8",
+   "to": "host1"
+  },
+  {
+   "from": "J8",
+   "to": "dip"
+  },
+  {
+   "from": "J8",
+   "to": "J1"
+  },
+  {
+   "from": "J8",
+   "to": "J9"
+  },
+  {
+   "from": "J9",
+   "to": "mess"
+  },
+  {
+   "from": "J9",
+   "to": "host3"
+  }
+ ]
+};
+</script>
+<script>
+/* ===== Routing: graph + shortest path (Dijkstra) ===== */
+// routing.js - graph + shortest path (Dijkstra) for the campus
+const Routing = (function () {
+  const WALK_SPEED = 80; // metres per minute
+
+  // Distance in metres between two points that have lat and lng
+  function haversine(a, b) {
+    const R = 6371000, rad = Math.PI / 180;
+    const dLat = (b.lat - a.lat) * rad, dLng = (b.lng - a.lng) * rad;
+    const h = Math.sin(dLat / 2) ** 2 +
+      Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+  }
+
+  // Turn the places and connections into a graph (neighbour lists with distances)
+  function build(nodes, edges) {
+    const byId = {}, adj = {};
+    nodes.forEach(n => { byId[n.id] = n; adj[n.id] = []; });
+    edges.forEach(e => {
+      const d = haversine(byId[e.from], byId[e.to]);
+      adj[e.from].push({ to: e.to, d: d });
+      adj[e.to].push({ to: e.from, d: d });
+    });
+    return { byId: byId, adj: adj };
+  }
+
+  const key = (a, b) => (a < b ? a + "|" + b : b + "|" + a);
+
+  // Dijkstra: shortest path from start to end. "penalty" makes chosen edges look longer.
+  function dijkstra(g, start, end, penalty) {
+    const dist = {}, prev = {}, done = {};
+    Object.keys(g.adj).forEach(id => { dist[id] = Infinity; });
+    dist[start] = 0;
+    for (;;) {
+      let u = null;
+      Object.keys(dist).forEach(id => {
+        if (!done[id] && dist[id] < Infinity && (u === null || dist[id] < dist[u])) u = id;
+      });
+      if (u === null || u === end) break;
+      done[u] = true;
+      g.adj[u].forEach(n => {
+        const cost = n.d * ((penalty && penalty[key(u, n.to)]) || 1);
+        if (dist[u] + cost < dist[n.to]) { dist[n.to] = dist[u] + cost; prev[n.to] = u; }
+      });
+    }
+    if (dist[end] === Infinity) return null;
+    const path = [];
+    for (let c = end; c !== undefined; c = prev[c]) path.unshift(c);
+    let total = 0;
+    for (let i = 0; i < path.length - 1; i++) total += haversine(g.byId[path[i]], g.byId[path[i + 1]]);
+    return { path: path, dist: total };
+  }
+
+  // Fastest route, plus one alternative if a clearly different path exists
+  function find(g, start, end) {
+    const best = dijkstra(g, start, end);
+    if (!best) return [];
+    const penalty = {};
+    for (let i = 0; i < best.path.length - 1; i++) penalty[key(best.path[i], best.path[i + 1])] = 3;
+    const alt = dijkstra(g, start, end, penalty);
+    return alt && alt.path.join() !== best.path.join() ? [best, alt] : [best];
+  }
+
+  // Signed turn angle at b when walking a -> b -> c (positive = left)
+  function turn(g, a, b, c) {
+    const A = g.byId[a], B = g.byId[b], C = g.byId[c];
+    const k = Math.cos(B.lat * Math.PI / 180);
+    const v1 = [(B.lng - A.lng) * k, B.lat - A.lat], v2 = [(C.lng - B.lng) * k, C.lat - B.lat];
+    return Math.atan2(v1[0] * v2[1] - v1[1] * v2[0], v1[0] * v2[0] + v1[1] * v2[1]) * 180 / Math.PI;
+  }
+
+  // Nearest named place to a junction (used to describe junctions in words)
+  function nearestPlace(g, id) {
+    let best = null, bd = Infinity;
+    Object.keys(g.byId).forEach(k => {
+      const n = g.byId[k];
+      if (n.type === "junction") return;
+      const d = haversine(g.byId[id], n);
+      if (d < bd) { bd = d; best = n; }
+    });
+    return best ? best.name : "";
+  }
+
+  const label = (g, id) => g.byId[id].type === "junction"
+    ? "the junction near " + nearestPlace(g, id) : g.byId[id].name;
+
+  // Turn-by-turn directions. Straight junctions are merged into one step.
+  function steps(g, path) {
+    const out = [];
+    let start = 0;
+    for (let i = 1; i < path.length; i++) {
+      const isPlace = g.byId[path[i]].type !== "junction";
+      const isLast = i === path.length - 1;
+      const bends = !isPlace && !isLast && Math.abs(turn(g, path[i - 1], path[i], path[i + 1])) >= 25;
+      if (!(isPlace || isLast || bends)) continue;
+      let d = 0;
+      for (let j = start; j < i; j++) d += haversine(g.byId[path[j]], g.byId[path[j + 1]]);
+      let text = "Head toward " + label(g, path[i]), icon = "↑";
+      if (start > 0) {
+        const a = turn(g, path[start - 1], path[start], path[start + 1]);
+        if (Math.abs(a) < 25) text = "Continue straight toward " + label(g, path[i]);
+        else if (a > 0) { text = "Turn left toward " + label(g, path[i]); icon = "↰"; }
+        else { text = "Turn right toward " + label(g, path[i]); icon = "↱"; }
+      }
+      out.push({ text: text, dist: Math.round(d), icon: icon, end: i });
+      start = i;
+    }
+    return out;
+  }
+
+  const minutes = d => Math.max(1, Math.round(d / WALK_SPEED));
+
+  return { build, haversine, dijkstra, find, steps, minutes };
+})();
+
+
+</script>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+let graph = Routing.build(CAMPUS.nodes, CAMPUS.edges);
+const nodes = graph.byId;
+const places = CAMPUS.nodes.filter(n => n.type !== "junction");
+
+// ---------- map ----------
+const sat = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 19, attribution: "Imagery: Esri" });
+const street = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "&copy; OpenStreetMap contributors" });
+const map = L.map("map", { layers: [sat] }).setView([17.0982, 81.9160], 18);
+L.control.layers({ "Satellite": sat, "Street": street }).addTo(map);
+
+let edgeLines = [];
+function drawEdges() {
+  edgeLines.forEach(l => map.removeLayer(l));
+  edgeLines = CAMPUS.edges.map(e => L.polyline(
+    [[nodes[e.from].lat, nodes[e.from].lng], [nodes[e.to].lat, nodes[e.to].lng]],
+    { color: "#ffeb3b", weight: 3, opacity: 0.6, interactive: false }).addTo(map));
+}
+
+places.forEach(p => {
+  L.circleMarker([p.lat, p.lng], { radius: 7, color: "#fff", weight: 2, fillColor: "#1a73e8", fillOpacity: 1, bubblingMouseEvents: false })
+    .bindTooltip(p.name, { permanent: true, direction: "right", offset: [8, 0], className: "lab" })
+    .on("click", () => openDirections(p.id))
+    .addTo(map);
+});
+
+// ---------- search ----------
+function goTo(id) {
+  const n = nodes[id];
+  $("sug").innerHTML = ""; $("search").value = n.name;
+  map.flyTo([n.lat, n.lng], 19);
+  L.popup().setLatLng([n.lat, n.lng]).setContent("<b>" + esc(n.name) + "</b>").openOn(map);
+}
+function suggest() {
+  const v = $("search").value.trim().toLowerCase();
+  const m = v ? places.filter(p => p.name.toLowerCase().includes(v)).slice(0, 6) : [];
+  $("sug").innerHTML = m.map(p => '<button class="row" data-id="' + p.id + '">' + esc(p.name) + ' <small>' + p.type + '</small></button>').join("");
+  return m;
+}
+$("search").addEventListener("input", suggest);
+$("search").addEventListener("keydown", e => { if (e.key === "Enter") { const m = suggest(); if (m.length) goTo(m[0].id); } });
+$("sug").addEventListener("click", e => { const b = e.target.closest("[data-id]"); if (b) goTo(b.dataset.id); });
+
+// ---------- directions ----------
+const routeLayer = L.layerGroup().addTo(map);
+const navLayer = L.layerGroup().addTo(map);
+const gpsLayer = L.layerGroup().addTo(map);
+let nav = null, me = null, watchId = null, lastSnap = null, lastReroute = 0;
+let routes = [], ri = 0;
+const opts = first => (first ? '<option value="">' + first + '</option>' : "") +
+  places.map(p => '<option value="' + p.id + '">' + esc(p.name) + '</option>').join("");
+$("from").innerHTML = '<option value="me">📍 My location</option>' + opts(""); $("to").innerHTML = opts("Choose destination");
+$("from").value = "gate";
+
+function openDirections(toId) {
+  $("dir").hidden = false;
+  if (toId) $("to").value = toId;
+  ri = 0; showRoute(true);
+}
+
+function drawRoutes(fit) {
+  stopNav();
+  routeLayer.clearLayers();
+  const ll = r => r.path.map(id => [nodes[id].lat, nodes[id].lng]);
+  routes.forEach((r, i) => {
+    if (i === ri) return;
+    L.polyline(ll(r), { color: "#9aa0a6", weight: 6, bubblingMouseEvents: false }).on("click", () => { ri = i; drawRoutes(false); renderResult(); }).addTo(routeLayer);
+  });
+  const best = routes[ri], pts = ll(best);
+  L.polyline(pts, { color: "#fff", weight: 10, interactive: false }).addTo(routeLayer);
+  L.polyline(pts, { color: "#1a73e8", weight: 6, interactive: false }).addTo(routeLayer);
+  const mark = (p, t, c) => L.marker(p, { icon: L.divIcon({ className: "", html: '<div class="ab" style="background:' + c + '">' + t + '</div>', iconSize: [28, 28], iconAnchor: [14, 14] }) }).addTo(routeLayer);
+  mark(pts[0], "A", "#188038"); mark(pts[pts.length - 1], "B", "#d93025");
+  if ($("from").value === "me" && me) L.polyline([[me.lat, me.lng], pts[0]], { color: "#1a73e8", weight: 3, dashArray: "4 6", interactive: false }).addTo(routeLayer);
+  if (fit) map.fitBounds(L.latLngBounds(pts).pad(0.3));
+}
+
+function renderResult() {
+  const g = graph, r = routes[ri];
+  let h = routes.map((x, i) => '<button class="row' + (i === ri ? " sel" : "") + '" data-r="' + i + '"><b>' + Routing.minutes(x.dist) + ' min</b> · ' + Math.round(x.dist) + ' m<br><small>' + (i ? "Alternative route" : "Fastest route") + '</small></button>').join("");
+  h += "<ol>";
+  const from = nodes[r.path[0]].name, to = nodes[r.path[r.path.length - 1]].name;
+  h += "<li>🟢 " + ($("from").value === "me" ? "Start at your location, near " : "Start at ") + esc(from) + "</li>";
+  Routing.steps(g, r.path).forEach((s, i) => { h += "<li id=\"st" + i + "\">" + s.icon + " " + esc(s.text) + " <small>(" + s.dist + " m)</small></li>"; });
+  h += "<li>📍 Arrive at " + esc(to) + "</li></ol>";
+  $("result").innerHTML = h;
+}
+
+function showRoute(fit) {
+  let from = $("from").value;
+  const to = $("to").value;
+  if (from === "me") {
+    if (!me) {
+      routeLayer.clearLayers(); routes = []; $("navctl").hidden = true;
+      $("result").innerHTML = "<p>Turn on <b>Use my location</b> (or Test mode and click the map) first.</p>";
+      return;
+    }
+    from = nearestNode(me).id;
+  }
+  routeLayer.clearLayers(); routes = []; $("navctl").hidden = true;
+  if (!from || !to) { $("result").innerHTML = "<p>Choose a destination.</p>"; return; }
+  if (from === to) { $("result").innerHTML = "<p>Start and destination are the same place.</p>"; return; }
+  routes = Routing.find(graph, from, to);
+  if (!routes.length) { $("result").innerHTML = "<p>No route found. Check that every place is connected.</p>"; return; }
+  if (ri >= routes.length) ri = 0;
+  drawRoutes(fit); renderResult(); $("navctl").hidden = false;
+}
+
+$("dirbtn").onclick = () => openDirections();
+$("from").onchange = $("to").onchange = () => { ri = 0; showRoute(true); };
+$("swap").onclick = () => { const f = $("from").value; $("from").value = $("to").value; $("to").value = f; ri = 0; showRoute(true); };
+$("result").addEventListener("click", e => { const b = e.target.closest("[data-r]"); if (b) { ri = +b.dataset.r; drawRoutes(false); renderResult(); } });
+
+// nearest campus point (place or junction) to a position
+function nearestNode(p) {
+  let best = null;
+  CAMPUS.nodes.forEach(n => {
+    const d = Routing.haversine(p, n);
+    if (!best || d < best.d) best = { id: n.id, name: n.name, d: d };
+  });
+  return best;
+}
+// where the position is along the route: distance from the start (s) and how far off the route (off), in metres
+function projectOnRoute(pts, cum, p) {
+  const mx = 111320 * Math.cos(p.lat * Math.PI / 180), my = 110540;
+  let best = { off: Infinity, s: 0 };
+  for (let i = 1; i < pts.length; i++) {
+    const ax = (pts[i - 1][1] - p.lng) * mx, ay = (pts[i - 1][0] - p.lat) * my;
+    const bx = (pts[i][1] - p.lng) * mx, by = (pts[i][0] - p.lat) * my;
+    const dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy || 1;
+    const t = Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len2));
+    const off = Math.hypot(ax + t * dx, ay + t * dy);
+    if (off < best.off) best = { off: off, s: cum[i - 1] + t * (cum[i] - cum[i - 1]) };
+  }
+  return best;
+}
+// ---------- my location (real GPS or test mode) ----------
+function setMe(lat, lng, acc, center) {
+  const first = !me;
+  me = { lat: lat, lng: lng, acc: acc || 0 };
+  gpsLayer.clearLayers();
+  if (me.acc > 8) L.circle([lat, lng], { radius: me.acc, color: "#1a73e8", weight: 1, fillOpacity: 0.12, interactive: false }).addTo(gpsLayer);
+  L.circleMarker([lat, lng], { radius: 8, color: "#fff", weight: 3, fillColor: "#4285f4", fillOpacity: 1, interactive: false }).addTo(gpsLayer);
+  const n = nearestNode(me);
+  const far = n.d > 1000 ? (n.d / 1000).toFixed(1) + " km" : Math.round(n.d) + " m";
+  $("gps").innerHTML = "<small>" + (n.d > 150 ? "You are about " + far + " from the campus (nearest point: " + esc(n.name) + ")." : "You are near " + esc(n.name) + ".") + (me.acc ? " Accuracy about " + Math.round(me.acc) + " m." : "") + "</small>";
+  if (first) $("from").value = "me";
+  if (center) map.setView([lat, lng], Math.max(map.getZoom(), 18));
+  if (nav && nav.onGps) { nav.onGps(); return; }
+  if (!nav && $("from").value === "me" && routes.length && n.id !== lastSnap) showRoute(false);
+  lastSnap = n.id;
+}
+
+$("gpsbtn").onclick = () => {
+  if (watchId !== null) {
+    navigator.geolocation.clearWatch(watchId); watchId = null;
+    $("gpsbtn").textContent = "📍 Use my location";
+    $("gps").innerHTML = "<small>Location is off.</small>";
+    return;
+  }
+  if (!navigator.geolocation) { $("gps").innerHTML = "<small>This browser has no location support. Use Test mode.</small>"; return; }
+  $("gps").innerHTML = "<small>Finding your location…</small>";
+  $("gpsbtn").textContent = "⏹ Stop location";
+  watchId = navigator.geolocation.watchPosition(
+    p => setMe(p.coords.latitude, p.coords.longitude, p.coords.accuracy, true),
+    err => {
+      const why = err.code === 1 ? "Permission denied. Allow location for this page in the browser address bar." : err.code === 3 ? "Timed out. Try again outdoors." : "Location is not available.";
+      $("gps").innerHTML = "<small>" + why + " If it keeps failing, open the page from an https link, or use Test mode.</small>";
+    },
+    { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 });
+};
+map.on("click", e => { if ($("test").checked) setMe(e.latlng.lat, e.latlng.lng, 0, false); });
+
+// ---------- start navigation (simulation or real GPS) ----------
+function speak(text) {
+  if ($("voice").checked && window.speechSynthesis) {
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+  }
+}
+
+function stopNav() {
+  if (nav) cancelAnimationFrame(nav.raf);
+  nav = null;
+  navLayer.clearLayers();
+  $("navbar").hidden = true;
+  if (window.speechSynthesis) window.speechSynthesis.cancel();
+  document.querySelectorAll("li.cur").forEach(li => li.classList.remove("cur"));
+}
+
+function startNav() {
+  if (!routes.length) return;
+  stopNav();
+  const gps = $("speed").value === "gps";
+  if (gps && !me) {
+    $("navtext").textContent = "Turn on Use my location (or Test mode) first.";
+    $("navbar").hidden = false;
+    return;
+  }
+  const path = routes[ri].path;
+  const pts = path.map(id => [nodes[id].lat, nodes[id].lng]);
+  const cum = [0];                       // distance from the start to each point
+  for (let i = 1; i < path.length; i++) cum.push(cum[i - 1] + Routing.haversine(nodes[path[i - 1]], nodes[path[i]]));
+  const total = cum[cum.length - 1];
+  const legs = Routing.steps(graph, path);
+  const dot = L.circleMarker(pts[0], { radius: 9, color: "#fff", weight: 3, fillColor: "#1a73e8", fillOpacity: 1 });
+  let leg = -1;
+  nav = { raf: 0, done: false };
+  $("navbar").hidden = false;
+  if (!gps) { dot.addTo(navLayer); map.setView(pts[0], 19, { animate: false }); }
+
+  // update the banner for a position s metres along the route
+  function show(s, ll) {
+    if (!gps) dot.setLatLng(ll);
+    map.panTo(ll, { animate: false });
+    if (gps ? s >= total - 8 : s >= total) {
+      const name = nodes[path[path.length - 1]].name;
+      $("navtext").textContent = "✅ You have arrived at " + name;
+      speak("You have arrived at " + name);
+      nav.done = true;
+      return;
+    }
+    let k = 0;
+    while (k < legs.length - 1 && cum[legs[k].end] < s) k++;
+    if (k !== leg) {
+      leg = k;
+      speak(legs[k].text);
+      document.querySelectorAll("li.cur").forEach(li => li.classList.remove("cur"));
+      const li = $("st" + k);
+      if (li) li.classList.add("cur");
+    }
+    $("navtext").textContent = legs[k].icon + " " + legs[k].text + " · " + Math.max(1, Math.round(cum[legs[k].end] - s)) + " m";
+  }
+
+  if (gps) {
+    // real GPS: called every time the location changes
+    nav.onGps = function () {
+      if (nav.done) return;
+      const nn = nearestNode(me);
+      if (nn.d > 150) {
+        $("navtext").textContent = "Go to the campus first (nearest point: " + nn.name + ", " + Math.round(nn.d) + " m away)";
+        return;
+      }
+      const pr = projectOnRoute(pts, cum, me);
+      if (pr.off > 30) {
+        $("navtext").textContent = "⚠ Off the route, finding a new route…";
+        if (Date.now() - lastReroute > 5000) {
+          lastReroute = Date.now();
+          $("from").value = "me"; ri = 0;
+          showRoute(false);    // new route from the nearest campus point (this stops the old navigation)
+          startNav();
+        }
+        return;
+      }
+      show(pr.s, [me.lat, me.lng]);
+    };
+    nav.onGps();
+  } else {
+    // simulation: a dot walks along the route
+    const speed = parseFloat($("speed").value);   // metres per second
+    let s = 0, last = null;
+    const frame = t => {
+      if (!nav) return;
+      if (last === null) last = t;
+      s = Math.min(total, s + (t - last) / 1000 * speed);
+      last = t;
+      let i = 1;
+      while (i < cum.length - 1 && cum[i] < s) i++;
+      const f = (s - cum[i - 1]) / ((cum[i] - cum[i - 1]) || 1);
+      show(s, [pts[i - 1][0] + (pts[i][0] - pts[i - 1][0]) * f, pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * f]);
+      if (nav && !nav.done) nav.raf = requestAnimationFrame(frame);
+    };
+    nav.raf = requestAnimationFrame(frame);
+  }
+}
+$("startnav").onclick = startNav;
+$("navstop").onclick = stopNav;
+
+// ---------- edit junctions ----------
+function listJ() {
+  $("out").value = CAMPUS.nodes.filter(n => n.type === "junction")
+    .map(n => n.id + ": " + n.lat.toFixed(6) + ", " + n.lng.toFixed(6)).join("\n");
+}
+const jmarkers = CAMPUS.nodes.filter(n => n.type === "junction").map(n => {
+  const m = L.marker([n.lat, n.lng], { draggable: true, icon: L.divIcon({ className: "jn", html: n.id, iconSize: [26, 26] }) });
+  m.on("drag", e => {
+    const p = e.target.getLatLng(); n.lat = p.lat; n.lng = p.lng;
+    graph = Routing.build(CAMPUS.nodes, CAMPUS.edges);
+    drawEdges(); listJ();
+    if (routes.length) showRoute(false);
+  });
+  return m;
+});
+$("edit").onchange = e => {
+  $("editbox").hidden = !e.target.checked;
+  jmarkers.forEach(m => e.target.checked ? m.addTo(map) : map.removeLayer(m));
+};
+$("copy").onclick = () => {
+  $("out").select();
+  try { document.execCommand("copy"); $("msg").textContent = "Copied"; } catch (x) { $("msg").textContent = "Press Ctrl+C"; }
+};
+
+$("apply").onclick = () => {
+  const jn = CAMPUS.nodes.filter(n => n.type === "junction");
+  let count = 0;
+  $("paste").value.split("\n").forEach(line => {
+    const m = line.match(/^\s*(J\d+)\s*:\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)/i);
+    if (!m) return;
+    const i = jn.findIndex(n => n.id.toLowerCase() === m[1].toLowerCase());
+    if (i < 0) return;
+    jn[i].lat = parseFloat(m[2]); jn[i].lng = parseFloat(m[3]);
+    jmarkers[i].setLatLng([jn[i].lat, jn[i].lng]);
+    count++;
+  });
+  graph = Routing.build(CAMPUS.nodes, CAMPUS.edges);
+  drawEdges(); listJ();
+  if (routes.length) showRoute(false);
+  $("msg2").textContent = count + " junction(s) updated";
+};
+
+drawEdges(); listJ();
+</script>
+</body>
+</html>
